@@ -37,13 +37,20 @@ Run
 ---
     python autoencoder_feature_extraction.py
 
-Outputs (written to <script_dir>/outputs/autoencoder_outputs/):
-    features_dense.csv / features_conv.csv  - (450 x 16) latent features per shot
-    recon_error_per_shot.csv                - reconstruction MSE per shot per model
-    training_curves.png                     - train/val loss for both models
-    reconstructions_<model>.png             - example curve reconstructions
-    latent_pca_<model>.png                  - 2D PCA of the 16-D latent space
-    summary.txt                             - final metrics comparison
+Outputs
+-------
+Each run writes to its own versioned subfolder so different setups never
+overwrite each other and stay easy to compare:
+
+    <script_dir>/outputs/autoencoder_outputs/
+        runs_summary.csv                    - one row per run (hyperparams + metrics)
+        <run_tag>/                          - e.g. L16_lr1e-04_wd1e-05_bs32_<timestamp>
+            features_dense.csv / features_conv.csv  - (n_shots x latent_dim) features
+            recon_error_per_shot.csv        - reconstruction MSE per shot per model
+            training_curves.png             - train/val loss for both models
+            reconstructions_<model>.png     - example curve reconstructions
+            latent_pca_<model>.png          - 2D PCA of the latent space
+            summary.txt                     - final metrics for this run
 """
 
 from __future__ import annotations
@@ -51,6 +58,7 @@ from __future__ import annotations
 import os
 import random
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -383,10 +391,26 @@ def plot_latent_pca(features, groups, out_path, title):
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
+def make_run_tag(cfg: Config) -> str:
+    """Unique, human-readable run id encoding the key hyperparameters + a timestamp.
+
+    Each run gets its own output subfolder named by this tag, so runs with
+    different setups never overwrite each other and stay easy to compare.
+    e.g. 'L16_lr1e-04_wd1e-05_bs32_20260622-153012'
+    """
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return (f"L{cfg.latent_dim}_lr{cfg.lr:.0e}_wd{cfg.weight_decay:.0e}"
+            f"_bs{cfg.batch_size}_{ts}")
+
+
 def main():
     cfg = CFG
     set_reproducibility(cfg.seed)
-    os.makedirs(cfg.out_dir, exist_ok=True)
+
+    run_tag = make_run_tag(cfg)
+    run_dir = os.path.join(cfg.out_dir, run_tag)
+    os.makedirs(run_dir, exist_ok=True)   # also creates the parent out_dir
+    print(f"Run: {run_tag}")
 
     device = get_device()
 
@@ -433,7 +457,7 @@ def main():
         feat_df = pd.DataFrame(feats, columns=[f"f{j:02d}" for j in range(cfg.latent_dim)])
         feat_df.insert(0, "doe_group", groups + 1)
         feat_df.insert(0, "shot", labels)
-        feat_df.to_csv(os.path.join(cfg.out_dir, f"features_{name}.csv"), index=False)
+        feat_df.to_csv(os.path.join(run_dir, f"features_{name}.csv"), index=False)
 
         # reconstruction error in ORIGINAL units (inverse-transform)
         recons_orig = scaler.inverse_transform(recons)
@@ -448,20 +472,22 @@ def main():
                          "overall_mse_orig": float(mse.mean())}
 
         plot_reconstructions(X, recons_orig, labels,
-                             os.path.join(cfg.out_dir, f"reconstructions_{name}.png"))
+                             os.path.join(run_dir, f"reconstructions_{name}.png"))
         plot_latent_pca(feats, groups,
-                        os.path.join(cfg.out_dir, f"latent_pca_{name}.png"),
-                        f"{name} AE - 16-D latent space (PCA to 2D)")
+                        os.path.join(run_dir, f"latent_pca_{name}.png"),
+                        f"{name} AE - {cfg.latent_dim}-D latent space (PCA to 2D)")
 
-    plot_training_curves(histories, os.path.join(cfg.out_dir, "training_curves.png"))
-    recon_errors.to_csv(os.path.join(cfg.out_dir, "recon_error_per_shot.csv"), index=False)
+    plot_training_curves(histories, os.path.join(run_dir, "training_curves.png"))
+    recon_errors.to_csv(os.path.join(run_dir, "recon_error_per_shot.csv"), index=False)
 
     # ----- summary -----
     lines = ["Undercomplete Autoencoder feature extraction - summary",
              "=" * 55,
+             f"run: {run_tag}",
              f"input dim (time steps): {n_time}",
              f"samples (shots): {len(labels)}  |  DOE groups: {len(np.unique(groups))}",
              f"latent (feature) dim: {cfg.latent_dim}",
+             f"lr: {cfg.lr}  |  weight_decay: {cfg.weight_decay}  |  batch_size: {cfg.batch_size}",
              f"train/val shots: {len(train_idx)}/{len(val_idx)} (group-level split)",
              ""]
     for name in models:
@@ -474,10 +500,25 @@ def main():
     lines.append(f"Lowest validation reconstruction error: '{best_model}' AE")
     summary = "\n".join(lines)
     print("\n" + summary)
-    with open(os.path.join(cfg.out_dir, "summary.txt"), "w") as f:
+    with open(os.path.join(run_dir, "summary.txt"), "w") as f:
         f.write(summary + "\n")
 
-    print(f"\nAll outputs written to {cfg.out_dir}")
+    # ----- append this run to the cross-run comparison table -----
+    row = {"run_tag": run_tag, "latent_dim": cfg.latent_dim, "lr": cfg.lr,
+           "weight_decay": cfg.weight_decay, "batch_size": cfg.batch_size,
+           "epochs": cfg.epochs, "patience": cfg.patience,
+           "val_fraction": cfg.val_fraction, "seed": cfg.seed}
+    for name in models:
+        r = results[name]
+        row[f"{name}_best_val"] = round(r["best_val_std"], 6)
+        row[f"{name}_overall_mse_orig"] = round(r["overall_mse_orig"], 6)
+    row["best_model"] = best_model
+    runs_csv = os.path.join(cfg.out_dir, "runs_summary.csv")
+    pd.DataFrame([row]).to_csv(runs_csv, mode="a",
+                              header=not os.path.exists(runs_csv), index=False)
+
+    print(f"\nAll outputs written to {run_dir}")
+    print(f"Cross-run comparison table: {runs_csv}")
 
 
 if __name__ == "__main__":
