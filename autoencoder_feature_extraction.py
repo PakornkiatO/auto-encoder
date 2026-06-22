@@ -60,6 +60,7 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from sklearn.preprocessing import StandardScaler
@@ -79,7 +80,7 @@ class Config:
     data_path: str = os.path.join(
         BASE_DIR, "data", "K8025_PackingCooling_Pressure-Data.csv"
     )
-    out_dir: str = os.path.join(BASE_DIR, "outputs")
+    out_dir: str = os.path.join(BASE_DIR, "outputs", "autoencoder_outputs")
 
     shots_per_group: int = 5     # every 5 columns the machine setup changes
     latent_dim: int = 16         # bottleneck size (undercomplete: 16 << 800)
@@ -181,19 +182,25 @@ class ConvAE(nn.Module):
     def __init__(self, input_len: int, latent_dim: int):
         super().__init__()
         self.input_len = input_len
-        # 800 -> 400 -> 200 -> 100 -> 50, channels 1->16->32->64->64
+        # default for input_len=800: 800 -> 400 -> 200 -> 100 -> 50, channels 1->16->32->64->64
         self.enc_conv = nn.Sequential(
             nn.Conv1d(1, 16, kernel_size=7, stride=2, padding=3), nn.ReLU(),
             nn.Conv1d(16, 32, kernel_size=7, stride=2, padding=3), nn.ReLU(),
             nn.Conv1d(32, 64, kernel_size=7, stride=2, padding=3), nn.ReLU(),
             nn.Conv1d(64, 64, kernel_size=7, stride=2, padding=3), nn.ReLU(),
         )
-        self.flat_len = input_len // 16          # 800 / 2^4 = 50
-        self.flat_feat = 64 * self.flat_len      # 3200
+        # Infer the flattened conv-output shape from a dummy forward pass so the
+        # bottleneck adapts to any input length / encoder depth, instead of
+        # assuming input_len is divisible by 2^(num stride-2 layers).
+        with torch.no_grad():
+            enc_out = self.enc_conv(torch.zeros(1, 1, input_len))
+        self.conv_channels = enc_out.shape[1]    # 64 by default
+        self.conv_out_len = enc_out.shape[2]      # 50 for input_len=800
+        self.flat_feat = self.conv_channels * self.conv_out_len
         self.enc_fc = nn.Linear(self.flat_feat, latent_dim)   # bottleneck
 
         self.dec_fc = nn.Linear(latent_dim, self.flat_feat)
-        # mirror: 50 -> 100 -> 200 -> 400 -> 800
+        # mirror the encoder back up; final length is fixed to input_len in forward()
         self.dec_conv = nn.Sequential(
             nn.ConvTranspose1d(64, 64, kernel_size=8, stride=2, padding=3), nn.ReLU(),
             nn.ConvTranspose1d(64, 32, kernel_size=8, stride=2, padding=3), nn.ReLU(),
@@ -210,8 +217,13 @@ class ConvAE(nn.Module):
 
     def forward(self, x):
         z = self.encode(x)
-        h = self.dec_fc(z).view(-1, 64, self.flat_len)
-        out = self.dec_conv(h).squeeze(1)        # (N, input_len)
+        h = self.dec_fc(z).view(-1, self.conv_channels, self.conv_out_len)
+        out = self.dec_conv(h)                    # (N, 1, L)
+        # Guarantee the output length matches the input (transpose-conv arithmetic
+        # only lands exactly on input_len for nice sizes like 800); a no-op there.
+        if out.shape[-1] != self.input_len:
+            out = F.interpolate(out, size=self.input_len, mode="linear", align_corners=False)
+        out = out.squeeze(1)                      # (N, input_len)
         return out, z
 
 
