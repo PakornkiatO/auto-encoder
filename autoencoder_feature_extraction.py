@@ -225,6 +225,10 @@ def train_model(model, train_loader, val_loader, cfg, device, name):
 
     amp_on = cfg.use_amp and device.type == "cuda"
     scaler_amp = torch.amp.GradScaler("cuda", enabled=amp_on)
+    # Async host->device copies are only safe from pinned memory (CUDA only).
+    # On MPS the host tensor is unpinned, so non_blocking=True races and reads
+    # garbage -> NaN. Keep it True only on CUDA.
+    non_blocking = device.type == "cuda"
 
     history = {"train": [], "val": []}
     best_val = float("inf")
@@ -235,7 +239,7 @@ def train_model(model, train_loader, val_loader, cfg, device, name):
         model.train()
         tr_loss = 0.0
         for (xb,) in train_loader:
-            xb = xb.to(device, non_blocking=True)
+            xb = xb.to(device, non_blocking=non_blocking)
             optim.zero_grad(set_to_none=True)
             with torch.autocast(device_type="cuda", enabled=amp_on):
                 recon, _ = model(xb)
@@ -250,7 +254,7 @@ def train_model(model, train_loader, val_loader, cfg, device, name):
         va_loss = 0.0
         with torch.no_grad():
             for (xb,) in val_loader:
-                xb = xb.to(device, non_blocking=True)
+                xb = xb.to(device, non_blocking=non_blocking)
                 with torch.autocast(device_type="cuda", enabled=amp_on):
                     recon, _ = model(xb)
                     loss = loss_fn(recon, xb)
