@@ -37,7 +37,7 @@ Run
 ---
     python autoencoder_feature_extraction.py
 
-Outputs (written to <script_dir>/outputs/):
+Outputs (written to <script_dir>/outputs/autoencoder_outputs/):
     features_dense.csv / features_conv.csv  - (450 x 16) latent features per shot
     recon_error_per_shot.csv                - reconstruction MSE per shot per model
     training_curves.png                     - train/val loss for both models
@@ -49,6 +49,7 @@ Outputs (written to <script_dir>/outputs/):
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass
 
 import numpy as np
@@ -100,14 +101,27 @@ class Config:
 CFG = Config()
 
 
+def set_reproducibility(seed: int) -> None:
+    """Make CPU/CUDA runs reproducible. Call once, before device/model setup.
+
+    Trades the cuDNN autotuner's small speedup for deterministic results, which
+    is the right call here (the whole run takes seconds).
+    """
+    # Must be set before the first cuBLAS call for deterministic matmuls on CUDA.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)                       # seeds CPU and all CUDA devices
+    torch.backends.cudnn.benchmark = False         # no autotuning -> deterministic
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
+
 def get_device() -> torch.device:
-    """Prefer CUDA (RTX 3070 Ti on the remote desktop), then Apple MPS, then CPU."""
+    """Detect compute device (pure — no global side effects): CUDA, then MPS, then CPU."""
     if torch.cuda.is_available():
-        dev = torch.device("cuda")
-        torch.backends.cudnn.benchmark = True  # autotune convs for fixed input size
         print(f"Device: CUDA -> {torch.cuda.get_device_name(0)} "
               f"({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB)")
-        return dev
+        return torch.device("cuda")
     if torch.backends.mps.is_available():
         print("Device: Apple MPS")
         return torch.device("mps")
@@ -370,8 +384,7 @@ def plot_latent_pca(features, groups, out_path, title):
 # --------------------------------------------------------------------------- #
 def main():
     cfg = CFG
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
+    set_reproducibility(cfg.seed)
     os.makedirs(cfg.out_dir, exist_ok=True)
 
     device = get_device()
