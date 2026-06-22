@@ -1,0 +1,17 @@
+# Python dependencies for the K8025 autoencoder feature-extraction script.
+#
+# NOTE: PyTorch is intentionally NOT listed here, because it must be installed
+# with the CUDA build that matches your GPU. Install it FIRST, separately:
+#
+#   RTX 3070 Ti (CUDA):  pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   CPU only:            pip install torch
+#
+# (plain "pip install torch" from PyPI gives a CPU-only build — no GPU.)
+#
+# Then install the rest with:  pip install -r requirements.txt
+
+numpy
+pandas
+scikit-learn
+matplotlib
+openpyxl
