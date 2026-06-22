@@ -22,8 +22,8 @@ Target machine
 --------------
 Windows remote desktop: NVIDIA RTX 3070 Ti (CUDA, 8 GB VRAM),
 Ryzen 9 5900X, 64 GB RAM.  The script auto-detects CUDA and uses
-mixed precision (AMP) + cuDNN autotuning when a GPU is present, and
-falls back cleanly to CPU otherwise.
+mixed precision (AMP) on the GPU, with deterministic/reproducible
+settings, and falls back cleanly to MPS/CPU otherwise.
 
 Requirements
 ------------
@@ -220,7 +220,7 @@ class ConvAE(nn.Module):
             nn.ConvTranspose1d(64, 32, kernel_size=8, stride=2, padding=3), nn.ReLU(),
             nn.ConvTranspose1d(32, 16, kernel_size=8, stride=2, padding=3), nn.ReLU(),
             nn.ConvTranspose1d(16, 16, kernel_size=8, stride=2, padding=3), nn.ReLU(),
-            nn.Conv1d(16, 1, kernel_size=7, padding=3),        # -> (1, 800)
+            nn.Conv1d(16, 1, kernel_size=7, padding=3),        # -> (1, L); fixed to input_len in forward()
         )
 
     def encode(self, x):
@@ -415,7 +415,7 @@ def main():
         "conv": ConvAE(n_time, cfg.latent_dim),
     }
 
-    histories, best_vals, results = {}, {}, {}
+    histories, results = {}, {}
     val_set = set(val_idx.tolist())
     recon_errors = pd.DataFrame({"shot": labels, "doe_group": groups + 1,
                                  "split": ["val" if i in val_set else "train"
@@ -425,7 +425,6 @@ def main():
         print(f"\n=== Training {name} autoencoder ===")
         model, hist, best_val = train_model(model, train_loader, val_loader, cfg, device, name)
         histories[name] = hist
-        best_vals[name] = best_val
 
         feats, recons = extract_features(model, X_all_t, device)
 
@@ -440,7 +439,8 @@ def main():
         mse = per_shot_mse(X, recons_orig)
         recon_errors[f"mse_{name}"] = mse
 
-        # diagnostics on the held-out val set, standardized space
+        # Full-precision recompute of the val MSE from the restored best model,
+        # as an integrity check against the (possibly AMP) train-time best_val.
         val_mse_std = per_shot_mse(X_all[val_idx], recons[val_idx]).mean()
         results[name] = {"best_val_std": best_val,
                          "val_mse_std": float(val_mse_std),
@@ -465,7 +465,8 @@ def main():
              ""]
     for name in models:
         r = results[name]
-        lines.append(f"[{name}] best val MSE (std): {r['best_val_std']:.5f}  | "
+        lines.append(f"[{name}] best val MSE (std, train-time): {r['best_val_std']:.5f}  | "
+                     f"recompute (full precision): {r['val_mse_std']:.5f}  | "
                      f"overall recon MSE (orig units): {r['overall_mse_orig']:.6f}")
     best_model = min(results, key=lambda n: results[n]["best_val_std"])
     lines.append("")
