@@ -281,9 +281,10 @@ def train_model(model, train_loader, val_loader, cfg, device, name):
         with torch.no_grad():
             for (xb,) in val_loader:
                 xb = xb.to(device, non_blocking=non_blocking)
-                with torch.autocast(device_type="cuda", enabled=amp_on):
-                    recon, _ = model(xb)
-                    loss = loss_fn(recon, xb)
+                # No autocast on validation: full precision keeps the val loss /
+                # early-stopping decisions stable and consistent across devices.
+                recon, _ = model(xb)
+                loss = loss_fn(recon, xb)
                 va_loss += loss.item() * xb.size(0)
         va_loss /= len(val_loader.dataset)
 
