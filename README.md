@@ -10,14 +10,18 @@ them.
 
 ```
 intern/
-├── autoencoder_feature_extraction.py   # the script
+├── autoencoder_feature_extraction.py   # train AEs, extract 16-D features per shot
+├── quality_mlp.py                      # predict quality targets from AE features
+├── predict_one_sample.py               # end-to-end check on one training shot
+├── verify_ae.py                        # autoencoder health checks (pass/fail)
 ├── requirements.txt
 ├── README.md
 ├── data/                               # raw data — NOT in git, copy manually
 │   ├── K8025_PackingCooling_Pressure-Data.csv   # 800 rows (time) x 450 cols (shots)
 │   ├── K8025_Parameter.xlsx
 │   └── K8025_weight-quality.xlsx
-└── outputs/autoencoder_outputs/        # generated results (gitignored)
+└── outputs/                            # generated results, one folder per run (gitignored)
+    └── <run_tag>/                      # e.g. L16_lr1e-03_wd1e-05_bs32_<timestamp>
 ```
 
 > **Note:** `data/` and `outputs/` are gitignored. If you clone via git, the raw
@@ -60,7 +64,7 @@ re-check the install step and `nvidia-smi`. A full run takes well under a minute
 
 ## Outputs
 
-Written to `outputs/autoencoder_outputs/`:
+Written to `outputs/<run_tag>/`:
 
 | File | Contents |
 |------|----------|

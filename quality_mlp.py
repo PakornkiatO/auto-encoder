@@ -14,7 +14,7 @@ A single multi-output MLP predicts all 7 targets from the 16 conv-AE features.
 Feature source
 --------------
 The autoencoder writes one versioned folder per run under
-    outputs/autoencoder_outputs/<run_tag>/features_conv.csv
+    outputs/<run_tag>/features_conv.csv
 This script lets you PICK which run's features to train on (interactive menu,
 or pass the run folder name/path as the first CLI argument).
 
@@ -64,6 +64,7 @@ from sklearn.metrics import r2_score
 
 # Reuse the autoencoder script's reproducibility + device helpers (no duplication).
 from autoencoder_feature_extraction import set_reproducibility, get_device, BASE_DIR
+from autoencoder_feature_extraction import CFG as AE_CFG
 
 
 # --------------------------------------------------------------------------- #
@@ -71,7 +72,9 @@ from autoencoder_feature_extraction import set_reproducibility, get_device, BASE
 # --------------------------------------------------------------------------- #
 @dataclass
 class Config:
-    runs_dir: str = os.path.join(BASE_DIR, "outputs", "autoencoder_outputs")
+    # Read features from wherever the autoencoder writes its runs (single source
+    # of truth, so the two scripts can't drift apart).
+    runs_dir: str = AE_CFG.out_dir
     quality_path: str = os.path.join(BASE_DIR, "data", "K8025_weight-quality.xlsx")
     features_file: str = "features_conv.csv"   # which AE features to use as input
     targets: list = field(default_factory=lambda: [
@@ -149,7 +152,7 @@ def load_features_and_targets(cfg: Config, run_dir: str):
     """Load AE features for the chosen run and align them with quality targets."""
     feat = pd.read_csv(os.path.join(run_dir, cfg.features_file))
     feat["shot"] = feat["shot"].astype(str)
-    feature_cols = [c for c in feat.columns if c.startswith("f")]
+    feature_cols = [c for c in feat.columns if c not in ("shot", "doe_group")]
 
     q = pd.read_excel(cfg.quality_path).rename(columns={"K8025": "shot"})
     q["shot"] = q["shot"].astype(str)
@@ -163,7 +166,7 @@ def load_features_and_targets(cfg: Config, run_dir: str):
     Y = df[cfg.targets].to_numpy(dtype=np.float32)
     groups = df["doe_group"].to_numpy()
     print(f"Loaded {len(df)} shots | {X.shape[1]} features -> {Y.shape[1]} targets")
-    return X, Y, groups, df["shot"].tolist(), feature_cols
+    return X, Y, groups, df["shot"].tolist()
 
 
 def group_split_3way(groups, val_frac, test_frac, seed):
@@ -288,7 +291,7 @@ def main():
     device = get_device()
 
     # ----- data -----
-    X, Y, groups, shots, feature_cols = load_features_and_targets(cfg, run_dir)
+    X, Y, groups, shots = load_features_and_targets(cfg, run_dir)
     tr, va, te = group_split_3way(groups, cfg.val_fraction, cfg.test_fraction, cfg.seed)
     print(f"Split (by DOE group): train {len(tr)} | val {len(va)} | test {len(te)} shots")
 
@@ -300,7 +303,7 @@ def main():
     to_t = lambda a: torch.tensor(a, dtype=torch.float32)
     model = QualityMLP(X.shape[1], Y.shape[1], cfg.hidden, cfg.dropout)
     print("\n=== Training quality MLP ===")
-    model, history = train_mlp(model, to_t(Xtr), to_t(Ytr), to_t(Xva), to_t(Yva), cfg, device)
+    model, _ = train_mlp(model, to_t(Xtr), to_t(Ytr), to_t(Xva), to_t(Yva), cfg, device)
 
     # ----- predict test set (back to original units) -----
     model.eval()

@@ -42,7 +42,7 @@ Outputs
 Each run writes to its own versioned subfolder so different setups never
 overwrite each other and stay easy to compare:
 
-    <script_dir>/outputs/autoencoder_outputs/
+    <script_dir>/outputs/
         runs_summary.csv                    - one row per run (hyperparams + metrics)
         <run_tag>/                          - e.g. L16_lr1e-04_wd1e-05_bs32_<timestamp>
             features_dense.csv / features_conv.csv  - (n_shots x latent_dim) features
@@ -89,7 +89,7 @@ class Config:
     data_path: str = os.path.join(
         BASE_DIR, "data", "K8025_PackingCooling_Pressure-Data.csv"
     )
-    out_dir: str = os.path.join(BASE_DIR, "outputs", "autoencoder_outputs")
+    out_dir: str = os.path.join(BASE_DIR, "outputs")
 
     shots_per_group: int = 5     # every 5 columns the machine setup changes
     latent_dim: int = 16         # bottleneck size (undercomplete: 16 << 800)
