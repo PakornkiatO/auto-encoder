@@ -15,6 +15,16 @@ outputs/
 # Raw data
 data/
 
+# Report / write-up documents (keep only the code pipeline in git)
+summation
+*.tex
+*.pdf
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.synctex.gz
+
 # OS / editor
 .DS_Store
 .vscode/

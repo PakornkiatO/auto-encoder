@@ -15,3 +15,4 @@ pandas
 scikit-learn
 matplotlib
 openpyxl
+joblib        # save/load scalers (model_io.py); ships with scikit-learn but used directly

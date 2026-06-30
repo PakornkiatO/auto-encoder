@@ -1,10 +1,11 @@
-# K8025 Pressure-Curve Feature Extraction
+# K8025 Pressure-Curve Feature Extraction and Quality Prediction
 
-Undercomplete autoencoder feature extraction for K8025 injection-molding
-**packing/cooling pressure curves**. Each shot is an 800-point pressure trace
-(800 time steps @ 1000 Hz); the script compresses every curve into a **16-D
-feature vector** using two autoencoders (a dense MLP and a 1D-conv) and compares
-them.
+A two-stage pipeline for K8025 injection-molding **packing/cooling pressure
+curves**. Each shot is an 800-point pressure trace (800 time steps @ 1000 Hz).
+(1) An **undercomplete autoencoder** compresses every curve into a **16-D
+feature vector** (a dense MLP and a 1D-conv autoencoder are trained and
+compared). (2) A **multi-output MLP** predicts the measured part-quality targets
+(three widths, two lengths, two weights) from those features.
 
 ## Project layout
 
@@ -12,16 +13,17 @@ them.
 intern/
 ├── autoencoder_feature_extraction.py   # train AEs, extract 16-D features per shot
 ├── quality_mlp.py                      # predict quality targets from AE features
-├── predict_one_sample.py               # end-to-end check on one training shot
-├── verify_ae.py                        # autoencoder health checks (pass/fail)
+├── model_io.py                         # save trained models + scalers per run
+├── outlier_evidence.py                 # analysis: data-error evidence figure
 ├── requirements.txt
 ├── README.md
+├── summation, summation.tex            # project write-up (plain + LaTeX report)
 ├── data/                               # raw data — NOT in git, copy manually
-│   ├── K8025_PackingCooling_Pressure-Data.csv   # 800 rows (time) x 450 cols (shots)
-│   ├── K8025_Parameter.xlsx
-│   └── K8025_weight-quality.xlsx
+│   ├── K8025_experiment/               # measured: pressure CSV, parameters, quality
+│   └── K8025_simulation/               # simulated: pressure + quality
 └── outputs/                            # generated results, one folder per run (gitignored)
-    └── <run_tag>/                      # e.g. L16_lr1e-03_wd1e-05_bs32_<timestamp>
+    └── <run_tag>/                      # features, plots, summary, saved AE (*.pt/*.joblib),
+                                        #   and quality_mlp/ (MLP results + saved MLP)
 ```
 
 > **Note:** `data/` and `outputs/` are gitignored. If you clone via git, the raw
@@ -50,7 +52,12 @@ shell instead of `cmd`.)
 
 ```bat
 conda activate intern
+
+:: 1) Train autoencoders + extract features (writes a new outputs/<run_tag>/):
 python autoencoder_feature_extraction.py
+
+:: 2) Predict quality from a run's features (interactive menu, or pass a run tag):
+python quality_mlp.py
 ```
 
 The first line of output reports the device:
@@ -64,7 +71,7 @@ re-check the install step and `nvidia-smi`. A full run takes well under a minute
 
 ## Outputs
 
-Written to `outputs/<run_tag>/`:
+**Autoencoder** — written to `outputs/<run_tag>/`:
 
 | File | Contents |
 |------|----------|
@@ -74,6 +81,19 @@ Written to `outputs/<run_tag>/`:
 | `training_curves.png` | train/val loss for both models |
 | `reconstructions_<model>.png` | example curve reconstructions |
 | `latent_pca_<model>.png` | 2D PCA view of the 16-D latent space |
+| `conv_ae.pt`, `dense_ae.pt`, `ae_scaler.joblib`, `ae_meta.json` | saved trained AE + input scaler + metadata |
+
+**Quality MLP** — written to `outputs/<run_tag>/quality_mlp/`:
+
+| File | Contents |
+|------|----------|
+| `metrics.csv` | per-target R² / RMSE: MLP vs linear-regression and mean baselines |
+| `predictions_test.csv` | per test-shot actual + predicted, each target |
+| `pred_vs_actual.png` | predicted vs actual scatter, per target |
+| `training_curve.png` | MLP train/val loss |
+| `mlp.pt`, `mlp_x_scaler.joblib`, `mlp_y_scaler.joblib`, `mlp_meta.json` | saved trained MLP + scalers + metadata |
+
+A top-level `outputs/runs_summary.csv` aggregates one row per AE run for comparison.
 
 ## Notes
 

@@ -33,7 +33,15 @@ Outputs (written to <chosen run folder>/quality_mlp/):
     metrics.csv            - per-target R2 / RMSE for MLP vs baselines
     predictions_test.csv   - per test shot: actual + predicted for each target
     pred_vs_actual.png     - scatter (predicted vs actual) per target
+    training_curve.png     - train/val loss vs epoch
     summary.txt            - headline metrics
+    mlp.pt                 - trained MLP weights (state_dict)
+    mlp_x_scaler.joblib    - feature (input) scaler
+    mlp_y_scaler.joblib    - target (output) scaler
+    mlp_meta.json          - {in_dim, out_dim, hidden, dropout, targets}
+
+The saved model/scaler/meta files let the trained MLP be reloaded later instead
+of retraining it.
 
 Run
 ---
@@ -65,6 +73,7 @@ from sklearn.metrics import r2_score
 # Reuse the autoencoder script's reproducibility + device helpers (no duplication).
 from autoencoder_feature_extraction import set_reproducibility, get_device, BASE_DIR
 from autoencoder_feature_extraction import CFG as AE_CFG
+import model_io
 
 
 # --------------------------------------------------------------------------- #
@@ -75,7 +84,7 @@ class Config:
     # Read features from wherever the autoencoder writes its runs (single source
     # of truth, so the two scripts can't drift apart).
     runs_dir: str = AE_CFG.out_dir
-    quality_path: str = os.path.join(BASE_DIR, "data", "K8025_weight-quality.xlsx")
+    quality_path: str = os.path.join(BASE_DIR, "data", "K8025_experiment", "K8025_weight-quality.xlsx")
     features_file: str = "features_conv.csv"   # which AE features to use as input
     targets: list = field(default_factory=lambda: [
         "W1", "W2", "W3", "L1", "L2", "Total_weight", "Part_weight"])
@@ -275,6 +284,20 @@ def plot_pred_vs_actual(y_true, y_pred, targets, r2_by_target, out_path):
     plt.close()
 
 
+def plot_training_curve(history, out_path):
+    plt.figure(figsize=(7, 5))
+    plt.plot(history["train"], label="train")
+    plt.plot(history["val"], "--", label="val")
+    plt.xlabel("epoch")
+    plt.ylabel("MSE (standardized space)")
+    plt.yscale("log")
+    plt.title("Quality MLP training curve")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=130)
+    plt.close()
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -303,7 +326,12 @@ def main():
     to_t = lambda a: torch.tensor(a, dtype=torch.float32)
     model = QualityMLP(X.shape[1], Y.shape[1], cfg.hidden, cfg.dropout)
     print("\n=== Training quality MLP ===")
-    model, _ = train_mlp(model, to_t(Xtr), to_t(Ytr), to_t(Xva), to_t(Yva), cfg, device)
+    model, history = train_mlp(model, to_t(Xtr), to_t(Ytr), to_t(Xva), to_t(Yva), cfg, device)
+    plot_training_curve(history, os.path.join(out_dir, "training_curve.png"))
+
+    # save the trained MLP + its scalers so it can be reloaded later
+    model_io.save_mlp(out_dir, model, xs, ys, X.shape[1], Y.shape[1],
+                      cfg.hidden, cfg.dropout, cfg.targets)
 
     # ----- predict test set (back to original units) -----
     model.eval()

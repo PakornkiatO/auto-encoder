@@ -4,7 +4,7 @@ packing/cooling pressure curves.
 
 Data
 ----
-K8025_PackingCooling_Pressure-Data.csv : 800 rows x 450 columns
+data/K8025_experiment/K8025_PackingCooling_Pressure-Data.csv : 800 rows x 450 cols
     - rows    = time steps sampled at 1000 Hz (1 ms each) -> 800 ms window
     - columns = shots (one injection-molding cycle each)
     - every 5 columns the machine setup changes -> 90 DOE groups x 5 shots = 450
@@ -31,7 +31,7 @@ Requirements
     conda activate intern
     # CUDA build of PyTorch for the RTX 3070 Ti, e.g.:
     pip install torch --index-url https://download.pytorch.org/whl/cu124
-    pip install numpy pandas scikit-learn matplotlib openpyxl
+    pip install numpy pandas scikit-learn matplotlib openpyxl joblib
 
 Run
 ---
@@ -44,13 +44,19 @@ overwrite each other and stay easy to compare:
 
     <script_dir>/outputs/
         runs_summary.csv                    - one row per run (hyperparams + metrics)
-        <run_tag>/                          - e.g. L16_lr1e-04_wd1e-05_bs32_<timestamp>
+        <run_tag>/                          - e.g. L16_lr1e-03_wd1e-05_bs32_<timestamp>
             features_dense.csv / features_conv.csv  - (n_shots x latent_dim) features
             recon_error_per_shot.csv        - reconstruction MSE per shot per model
             training_curves.png             - train/val loss for both models
             reconstructions_<model>.png     - example curve reconstructions
             latent_pca_<model>.png          - 2D PCA of the latent space
             summary.txt                     - final metrics for this run
+            conv_ae.pt / dense_ae.pt        - trained autoencoder weights (state_dict)
+            ae_scaler.joblib                - input StandardScaler (fit on train)
+            ae_meta.json                    - {input_len, latent_dim, models}
+
+The saved model/scaler/meta files let a trained AE be reloaded later (e.g. for
+inference) instead of retraining it.
 """
 
 from __future__ import annotations
@@ -75,6 +81,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 
+import model_io
+
 
 # Resolve paths relative to this file so the script runs from any working dir
 # (important on the Windows remote desktop).
@@ -87,7 +95,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 @dataclass
 class Config:
     data_path: str = os.path.join(
-        BASE_DIR, "data", "K8025_PackingCooling_Pressure-Data.csv"
+        BASE_DIR, "data", "K8025_experiment", "K8025_PackingCooling_Pressure-Data.csv"
     )
     out_dir: str = os.path.join(BASE_DIR, "outputs")
 
@@ -119,7 +127,7 @@ def set_reproducibility(seed: int) -> None:
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)                       # seeds CPU and all CUDA devices
+    torch.manual_seed(seed)                        # seeds CPU and all CUDA devices
     torch.backends.cudnn.benchmark = False         # no autotuning -> deterministic
     torch.use_deterministic_algorithms(True, warn_only=True)
 
@@ -446,10 +454,12 @@ def main():
                                  "split": ["val" if i in val_set else "train"
                                            for i in range(len(labels))]})
 
+    trained = {}
     for name, model in models.items():
         print(f"\n=== Training {name} autoencoder ===")
         model, hist, best_val = train_model(model, train_loader, val_loader, cfg, device, name)
         histories[name] = hist
+        trained[name] = model
 
         feats, recons = extract_features(model, X_all_t, device)
 
@@ -479,6 +489,9 @@ def main():
 
     plot_training_curves(histories, os.path.join(run_dir, "training_curves.png"))
     recon_errors.to_csv(os.path.join(run_dir, "recon_error_per_shot.csv"), index=False)
+
+    # save trained models + scaler so downstream scripts can load instead of retrain
+    model_io.save_ae(run_dir, trained, scaler, n_time, cfg.latent_dim)
 
     # ----- summary -----
     lines = ["Undercomplete Autoencoder feature extraction - summary",
